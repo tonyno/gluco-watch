@@ -47,6 +47,7 @@ class EasyViewClient:
         self.username = username
         self.password = password
         self.user_type = user_type
+        self.user_id = None
         self.session = requests.Session()
         self._apptag = "v=3.0.2(15);n=eyvw"
         
@@ -72,13 +73,14 @@ class EasyViewClient:
     
     def login(self) -> requests.Response:
         """
-        Login to EasyView API.
+        Login to EasyView API and extract user_id from response.
         
         Returns:
             Response object from login request
             
         Raises:
             requests.HTTPError: If login fails
+            ValueError: If user_id cannot be extracted from login response
         """
         payload = {
             "user_name": self.username,
@@ -94,11 +96,48 @@ class EasyViewClient:
         response.raise_for_status()
         
         print(f"Login successful. Status: {response.status_code}")
+        
+        # Extract and store user_id from login response
+        self.user_id = self.extract_monitor_uid_from_login(response)
+        print(f"Extracted user_id: {self.user_id}")
+
         return response
+    
+    def extract_monitor_uid_from_login(self, login_response: requests.Response) -> str:
+        """
+        Extract monitor UID from login response.
+        
+        Args:
+            login_response: Response object from login request
+            
+        Returns:
+            Monitor UID string
+            
+        Raises:
+            ValueError: If monitor UID cannot be extracted from response
+        """
+        try:
+            login_data = login_response.json()
+            # Try to extract UID from response (adjust based on actual API response structure)
+            if "monitor_uid" in login_data:
+                return login_data["monitor_uid"]
+            elif "uid" in login_data:
+                return login_data["uid"]
+            else:
+                # If not in response, try to get from cookies or other fields
+                # This is a fallback - you may need to adjust based on actual API response
+                raise ValueError(
+                    "EASYVIEW_MONITOR_UID not set and could not be extracted from login response. "
+                    "Please set it in .env file."
+                )
+        except (json.JSONDecodeError, KeyError) as e:
+            raise ValueError(
+                f"Could not extract monitor UID from login response: {e}. "
+                "Please set EASYVIEW_MONITOR_UID in .env file."
+            )
     
     def get_status(
         self,
-        monitor_uid: str,
         tz_offset_hours: int = 1,
         window_hours: int = 24
     ) -> Dict[str, Any]:
@@ -106,7 +145,6 @@ class EasyViewClient:
         Get monitor status from EasyView API.
         
         Args:
-            monitor_uid: Monitor UID
             tz_offset_hours: Timezone offset in hours (default: 1 for CET)
             window_hours: Hours to look back (default: 24)
             
@@ -114,18 +152,28 @@ class EasyViewClient:
             JSON response as dictionary
             
         Raises:
+            ValueError: If user_id is not set (login not called or failed)
             requests.HTTPError: If request fails
         """
+        if not self.user_id:
+            raise ValueError(
+                "user_id not set. Please call login() first to extract user_id from login response."
+            )
+        
         param = self._build_easyview_param(tz_offset_hours, window_hours)
-        status_url = f"{self.STATUS_URL_TEMPLATE.format(monitor_uid=monitor_uid)}?param={param}"
+        status_url = f"{self.STATUS_URL_TEMPLATE.format(monitor_uid=self.user_id)}?param={param}"
         
         response = self.session.get(
             status_url,
             headers=self._get_status_headers()
         )
         response.raise_for_status()
+
+        # Dump the raw response JSON to a file for debugging or inspection
+        with open("response_dump.json", "w", encoding="utf-8") as f:
+            f.write(response.text)
         
-        return response.json()
+        return json.loads(response.text)
     
     @staticmethod
     def _build_easyview_param(tz_offset_hours: int = 1, window_hours: int = 24) -> str:
@@ -178,6 +226,7 @@ def prepare_for_firestore(data: Any, max_depth: int = 100, current_depth: int = 
     - Infinity (float('inf') or float('-inf'))
     - Some complex nested structures
     - Circular references
+    - Arrays of arrays (convert to arrays of objects)
     
     Args:
         data: Data to prepare (can be dict, list, or primitive)
@@ -198,7 +247,42 @@ def prepare_for_firestore(data: Any, max_depth: int = 100, current_depth: int = 
             result[key_str] = prepare_for_firestore(value, max_depth, current_depth + 1)
         return result
     elif isinstance(data, (list, tuple)):
-        # Convert tuples to lists (Firestore prefers lists)
+        # Check if this is an array of arrays (which Firestore doesn't handle well)
+        # Only convert if we're confident ALL elements are arrays/tuples
+        if len(data) > 0:
+            # Check if first element is an array/tuple
+            first_is_array = isinstance(data[0], (list, tuple))
+            
+            if first_is_array:
+                # Sample more elements to confirm this is truly an array of arrays
+                # Check multiple elements to avoid false positives
+                sample_indices = [0]  # Always check first
+                if len(data) > 1:
+                    sample_indices.append(len(data) - 1)  # Check last
+                if len(data) > 2:
+                    sample_indices.append(len(data) // 2)  # Check middle
+                
+                is_array_of_arrays = all(
+                    isinstance(data[i], (list, tuple)) for i in sample_indices
+                )
+                
+                if is_array_of_arrays:
+                    # Convert array of arrays to array of objects
+                    # This prevents "invalid nested entity" errors in Firestore
+                    converted = []
+                    for item in data:
+                        if isinstance(item, (list, tuple)):
+                            # Convert to object with numeric string keys (Firestore-friendly)
+                            item_dict = {}
+                            for idx, val in enumerate(item):
+                                item_dict[str(idx)] = prepare_for_firestore(val, max_depth, current_depth + 1)
+                            converted.append(item_dict)
+                        else:
+                            # If we find a non-array item, just process it normally
+                            converted.append(prepare_for_firestore(item, max_depth, current_depth + 1))
+                    return converted
+        
+        # Regular array - convert tuples to lists, process each item
         return [prepare_for_firestore(item, max_depth, current_depth + 1) for item in data]
     elif isinstance(data, float):
         # Handle NaN and Infinity
@@ -207,7 +291,10 @@ def prepare_for_firestore(data: Any, max_depth: int = 100, current_depth: int = 
         elif math.isinf(data):
             return None  # Convert Infinity to None
         return data
-    elif isinstance(data, (int, str, bool)) or data is None:
+    elif isinstance(data, str):
+        # Strings pass through unchanged - Firestore handles them natively
+        return data
+    elif isinstance(data, (int, bool)) or data is None:
         return data
     elif isinstance(data, (bytes, bytearray)):
         # Convert bytes to base64 string
@@ -245,7 +332,6 @@ def main():
     username = os.getenv("EASYVIEW_USERNAME")
     password = os.getenv("EASYVIEW_PASSWORD")
     user_type = os.getenv("EASYVIEW_USER_TYPE", "P")
-    monitor_uid = os.getenv("EASYVIEW_MONITOR_UID")
     tz_offset = int(os.getenv("TZ_OFFSET_HOURS", "1"))
     window_hours = int(os.getenv("WINDOW_HOURS", "24"))
     
@@ -257,35 +343,13 @@ def main():
     # Initialize client
     client = EasyViewClient(username, password, user_type)
     
-    # Login
-    login_response = client.login()
+    # Login (this will extract and store user_id)
+    client.login()
     
-    # Extract monitor UID from login response if not provided in env
-    if not monitor_uid:
-        try:
-            login_data = login_response.json()
-            # Try to extract UID from response (adjust based on actual API response structure)
-            if "monitor_uid" in login_data:
-                monitor_uid = login_data["monitor_uid"]
-            elif "uid" in login_data:
-                monitor_uid = login_data["uid"]
-            else:
-                # If not in response, try to get from cookies or other fields
-                # This is a fallback - you may need to adjust based on actual API response
-                raise ValueError(
-                    "EASYVIEW_MONITOR_UID not set and could not be extracted from login response. "
-                    "Please set it in .env file."
-                )
-        except (json.JSONDecodeError, KeyError) as e:
-            raise ValueError(
-                f"Could not extract monitor UID from login response: {e}. "
-                "Please set EASYVIEW_MONITOR_UID in .env file."
-            )
-    
-    print(f"Using monitor UID: {monitor_uid}")
+    print(f"Using user_id: {client.user_id}")
     
     # Get status
-    status_data = client.get_status(monitor_uid, tz_offset, window_hours)
+    status_data = client.get_status(tz_offset, window_hours)
     
     print(f"Status retrieved successfully")
     print(f"Response data keys: {list(status_data.keys()) if isinstance(status_data, dict) else 'N/A'}")
@@ -294,23 +358,12 @@ def main():
     firestore_data = {
         "timestamp": firestore.SERVER_TIMESTAMP,
         "fetched_at": int(time.time()),
+        "data": status_data['data']
     }
     
-    # If response has 'data' field, store it as JSON string to avoid Firestore nesting limits
-    # Firestore has a limit of 20 levels of nesting, and the API data can be very deeply nested
-    if isinstance(status_data, dict) and "data" in status_data:
-        # Store the complex nested 'data' field as a JSON string
-        # This avoids Firestore's nesting depth limitations
-        firestore_data["data_json"] = json.dumps(status_data["data"], default=str)
-        if "error" in status_data:
-            firestore_data["error"] = status_data["error"]
-    else:
-        # If no 'data' field, store the whole response as JSON string
-        firestore_data["response_json"] = json.dumps(status_data, default=str)
-    
     # Save to Firestore
-    # Use monitor_uid as the user UID, or extract from status_data if different
-    save_to_firestore(monitor_uid, firestore_data)
+    # Use user_id from the client
+    save_to_firestore(client.user_id, firestore_data)
     
     print("Process completed successfully")
 

@@ -47,3 +47,8 @@ The script will:
 - `EASYVIEW_MONITOR_UID`: Monitor UID (optional, will try to extract from login response)
 - `TZ_OFFSET_HOURS`: Timezone offset in hours (default: 1 for CET)
 - `WINDOW_HOURS`: Hours to look back when fetching data (default: 24)
+
+
+# Loading from endpoint
+
+https://firestore.googleapis.com/v1/projects/gluco-watch/databases/(default)/documents/users/78347/state/latest

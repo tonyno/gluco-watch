@@ -138,26 +138,60 @@ namespace TrayApp
             Color bgColor = GetGlucoseColor(value);
 
             Bitmap bmp = new Bitmap(16, 16);
-            using (Graphics g = Graphics.FromImage(bmp))
+            Graphics g = null;
+            try
             {
+                g = Graphics.FromImage(bmp);
                 g.Clear(bgColor);
                 g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
-                using (Font font = new Font("Segoe UI", 8, FontStyle.Bold, GraphicsUnit.Pixel))
-                using (Brush textBrush = Brushes.White)
+                // Round to nearest integer for display in small icon
+                string text = Math.Round(value).ToString();
+
+                // Try Segoe UI first, fallback to system font if not available
+                Font font = null;
+                try
                 {
-                    // Round to nearest integer for display in small icon
-                    string text = Math.Round(value).ToString();
-                    SizeF size = g.MeasureString(text, font);
+                    font = new Font("Segoe UI", 8, FontStyle.Bold, GraphicsUnit.Pixel);
+                }
+                catch
+                {
+                    font = new Font(SystemFonts.DefaultFont.FontFamily, 7, FontStyle.Bold, GraphicsUnit.Pixel);
+                }
 
-                    float x = (16 - size.Width) / 2;
-                    float y = (16 - size.Height) / 2 - 1;
+                try
+                {
+                    using (SolidBrush textBrush = new SolidBrush(Color.White))
+                    {
+                        SizeF size = g.MeasureString(text, font);
 
-                    g.DrawString(text, font, textBrush, x, y);
+                        float x = Math.Max(0, (16 - size.Width) / 2);
+                        float y = Math.Max(0, (16 - size.Height) / 2 - 1);
+
+                        // Ensure coordinates are valid
+                        if (!float.IsNaN(x) && !float.IsNaN(y) && !float.IsInfinity(x) && !float.IsInfinity(y))
+                        {
+                            g.DrawString(text, font, textBrush, x, y);
+                        }
+                    }
+                }
+                finally
+                {
+                    font?.Dispose();
                 }
             }
+            finally
+            {
+                g?.Dispose();
+            }
 
-            return Icon.FromHandle(bmp.GetHicon());
+            IntPtr hIcon = bmp.GetHicon();
+            Icon icon = Icon.FromHandle(hIcon);
+            // Create a copy so we can dispose the bitmap
+            Icon result = new Icon(icon, icon.Size);
+            icon.Dispose();
+            bmp.Dispose();
+            return result;
         }
 
         static void ShowRedZoneWarning(double value)

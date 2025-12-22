@@ -19,7 +19,7 @@ namespace TrayApp
         private static bool isInRedZone = false;
         private static DateTime? lastWarningTime = null;
         
-        private const string ApiEndpoint = "https://firestore.googleapis.com/v1/projects/gluco-watch/databases/(default)/documents/users/78347/";
+        private const string ApiEndpoint = "https://gluco-watch-default-rtdb.europe-west1.firebasedatabase.app/users/78347/latest.json";
         private const double LOW_THRESHOLD = 3.9;
         private const double HIGH_THRESHOLD = 10.0;
 
@@ -48,7 +48,7 @@ namespace TrayApp
 
             // Set up timer to fetch data every 1 minute
             updateTimer = new System.Windows.Forms.Timer();
-            updateTimer.Interval = 60000; // 1 minute in milliseconds
+            updateTimer.Interval = 3000; // 1 minute in milliseconds
             updateTimer.Tick += async (s, e) => await FetchGlucoseData();
             updateTimer.Start();
 
@@ -66,17 +66,31 @@ namespace TrayApp
                 response.EnsureSuccessStatusCode();
 
                 string jsonContent = await response.Content.ReadAsStringAsync();
+                
+                // Log the payload
+                Console.WriteLine($"Received payload: {jsonContent}");
+                
                 var jsonDoc = JsonDocument.Parse(jsonContent);
 
-                // Navigate to fields.main.mapValue.fields.glucose.doubleValue
-                if (jsonDoc.RootElement.TryGetProperty("fields", out var fields) &&
-                    fields.TryGetProperty("main", out var main) &&
-                    main.TryGetProperty("mapValue", out var mapValue) &&
-                    mapValue.TryGetProperty("fields", out var mainFields) &&
-                    mainFields.TryGetProperty("glucose", out var glucose) &&
-                    glucose.TryGetProperty("doubleValue", out var doubleValue))
+                // Navigate to main.glucose (Firebase Realtime DB structure)
+                if (jsonDoc.RootElement.TryGetProperty("main", out var main) &&
+                    main.TryGetProperty("glucose", out var glucose))
                 {
-                    double glucoseDouble = doubleValue.GetDouble();
+                    double glucoseDouble = glucose.GetDouble();
+                    
+                    // Log main.timestamp and calculate data age
+                    if (main.TryGetProperty("timestamp", out var timestamp))
+                    {
+                        double timestampValue = timestamp.GetDouble();
+                        Console.WriteLine($"main.timestamp: {timestamp.GetRawText()}");
+                        
+                        // Convert Unix timestamp to DateTime
+                        DateTimeOffset dataTime = DateTimeOffset.FromUnixTimeSeconds((long)timestampValue);
+                        DateTime currentTime = DateTime.Now;
+                        TimeSpan age = currentTime - dataTime.DateTime;
+                        
+                        Console.WriteLine($"Data age: {age.TotalSeconds:F1} seconds ({age.TotalMinutes:F2} minutes)");
+                    }
 
                     // Update icon on UI thread
                     if (trayIcon != null && uiContext != null)

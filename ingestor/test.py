@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional, Union
 
 import requests
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, db
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -21,12 +21,16 @@ load_dotenv()
 
 # Firebase initialization
 FIREBASE_CREDENTIALS_PATH = "gluco-watch-firebase-adminsdk-fbsvc-cd567c4e05.json"
+FIREBASE_DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL", "https://gluco-watch-default-rtdb.europe-west1.firebasedatabase.app/")
 
 if not firebase_admin._apps:
     cred = credentials.Certificate(FIREBASE_CREDENTIALS_PATH)
-    firebase_admin.initialize_app(cred)
+    # Initialize with database URL for Realtime Database support
+    firebase_admin.initialize_app(cred, {
+        'databaseURL': FIREBASE_DATABASE_URL
+    })
 
-db = firestore.client()
+db_firestore = firestore.client()
 
 
 def dump_data_to_json_file(data, filename="dump_data.json"):
@@ -189,10 +193,11 @@ class EasyViewClient:
     def get_values(self, data):
         last_item = data['data']['chart']['sg'][-1]
 
-        ts_utc = last_item[0]
+        ts_utc = float(last_item[0])
         dt = datetime.datetime.fromtimestamp(ts_utc ) # - tz_offset * 3600 - not usded by them
         data = {
             "glucose": round(last_item[1], 1),
+            "timestamp": ts_utc,
             "time": dt.isoformat(),
         }
         
@@ -358,11 +363,28 @@ def save_to_firestore(uid: str, data: Dict[str, Any]) -> None:
     # Prepare data for Firestore (handle NaN, Infinity, etc.)
     #cleaned_data = prepare_for_firestore(data)
     
-    doc_ref = db.collection("users").document(uid_str)
+    doc_ref = db_firestore.collection("users").document(uid_str)
     doc_ref.set(data)
-    print(f"Data saved to Firestore: users/{uid_str}/state/latest")
+    print(f"Data saved to Firestore: users/{uid_str}")
 
     dump_data_to_json_file(data, f"dump_data_{uid_str}.json")
+
+
+def save_to_realtime_db(uid: str, data: Dict[str, Any]) -> None:
+    """
+    Save monitor status data to Firebase Realtime Database.
+    
+    Args:
+        uid: User UID (will be converted to string if needed)
+        data: Data to save
+    """
+    # Ensure uid is a string
+    uid_str = str(uid)
+    
+    # Get reference to the path: users/{uid}/latest
+    ref = db.reference(f"users/{uid_str}/latest")
+    ref.set(data)
+    print(f"Data saved to Realtime Database: users/{uid_str}/latest")
 
 
 def main():
@@ -410,6 +432,9 @@ def main():
     # Save to Firestore
     # Use user_id from the client
     save_to_firestore(client.user_id, firestore_data)
+    
+    # Save to Realtime Database
+    save_to_realtime_db(client.user_id, firestore_data)
     
     print("Process completed successfully")
 

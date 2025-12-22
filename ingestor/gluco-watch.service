@@ -1,0 +1,28 @@
+[Unit]
+Description=Gluco-Watch Service - Monitors glucose levels via EasyView API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tonda
+Group=tonda
+WorkingDirectory=/home/tonda/gluco-watch/ingestor
+Environment="PATH=/home/tonda/.local/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/usr/bin/python3 /home/tonda/gluco-watch/ingestor/test.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gluco-watch
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Resource limits (optional, adjust as needed)
+# MemoryMax=256M
+# CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

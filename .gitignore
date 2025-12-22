@@ -4,3 +4,4 @@ ingestor/response_dump.json
 TrayApp/bin/*
 TrayApp/obj/*
 ingestor/dump_data*.json
+ingestor/logs/*

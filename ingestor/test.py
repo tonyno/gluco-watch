@@ -3,12 +3,17 @@ EasyView API client for fetching glucose monitor status and saving to Firestore.
 """
 
 import os
+import sys
 import base64
 import json
 import time
 import math
 import datetime
 import urllib.parse
+import logging
+import logging.handlers
+import signal
+from pathlib import Path
 from typing import Dict, Any, Optional, Union
 
 import requests
@@ -16,19 +21,73 @@ import firebase_admin
 from firebase_admin import credentials, firestore, db
 from dotenv import load_dotenv
 
+
+# Get the directory where this script is located
+SCRIPT_DIR = Path(__file__).parent.absolute()
+
 # Load environment variables
-load_dotenv()
+env_path = SCRIPT_DIR / ".env"
+load_dotenv(env_path)
+
+# Configure logging
+LOG_DIR = SCRIPT_DIR / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+
+LOG_FILE = LOG_DIR / "gluco-watch.log"
+LOG_FILE_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+LOG_BACKUP_COUNT = 5  # Keep 5 backup files
+
+# Create logger
+logger = logging.getLogger("gluco-watch")
+logger.setLevel(logging.DEBUG)
+
+# Create formatters
+detailed_formatter = logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+simple_formatter = logging.Formatter(
+    '%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+# File handler with rotation
+file_handler = logging.handlers.RotatingFileHandler(
+    LOG_FILE,
+    maxBytes=LOG_FILE_MAX_BYTES,
+    backupCount=LOG_BACKUP_COUNT,
+    encoding='utf-8'
+)
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(detailed_formatter)
+
+# Console handler
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(simple_formatter)
+
+# Add handlers to logger
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+
+# Global flag for graceful shutdown
+shutdown_flag = False
 
 # Firebase initialization
-FIREBASE_CREDENTIALS_PATH = "gluco-watch-firebase-adminsdk-fbsvc-cd567c4e05.json"
+FIREBASE_CREDENTIALS_PATH = SCRIPT_DIR / "gluco-watch-firebase-adminsdk-fbsvc-cd567c4e05.json"
 FIREBASE_DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL", "https://gluco-watch-default-rtdb.europe-west1.firebasedatabase.app/")
 
 if not firebase_admin._apps:
-    cred = credentials.Certificate(FIREBASE_CREDENTIALS_PATH)
+    if not FIREBASE_CREDENTIALS_PATH.exists():
+        logger.error(f"Firebase credentials file not found: {FIREBASE_CREDENTIALS_PATH}")
+        raise FileNotFoundError(f"Firebase credentials file not found: {FIREBASE_CREDENTIALS_PATH}")
+    
+    cred = credentials.Certificate(str(FIREBASE_CREDENTIALS_PATH))
     # Initialize with database URL for Realtime Database support
     firebase_admin.initialize_app(cred, {
         'databaseURL': FIREBASE_DATABASE_URL
     })
+    logger.info(f"Firebase initialized with database URL: {FIREBASE_DATABASE_URL}")
 
 db_firestore = firestore.client()
 
@@ -40,8 +99,13 @@ def dump_data_to_json_file(data, filename="dump_data.json"):
         data: The data (usually dict or list) to dump.
         filename: The output filename (default "dump_data.json")
     """
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    dump_path = SCRIPT_DIR / filename
+    try:
+        with open(dump_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        logger.debug(f"Data dumped to {dump_path}")
+    except Exception as e:
+        logger.error(f"Failed to dump data to {dump_path}: {e}", exc_info=True)
 
 class EasyViewClient:
     """Client for interacting with EasyView Medtrum API."""
@@ -97,26 +161,42 @@ class EasyViewClient:
             requests.HTTPError: If login fails
             ValueError: If user_id cannot be extracted from login response
         """
+        logger.info(f"Attempting login for user: {self.username}")
+        payload = {
+            "user_name": self.username,
+            "user_type": self.user_type,
+            "password": "***" if self.password else None,  # Don't log password
+        }
+        logger.debug(f"Login payload (password hidden): {payload}")
+        
         payload = {
             "user_name": self.username,
             "user_type": self.user_type,
             "password": self.password,
         }
         
-        response = self.session.post(
-            self.LOGIN_URL,
-            json=payload,
-            headers=self._get_login_headers()
-        )
-        response.raise_for_status()
-        
-        print(f"Login successful. Status: {response.status_code}")
-        
-        # Extract and store user_id from login response
-        self.user_id = self.extract_monitor_uid_from_login(response)
-        print(f"Extracted user_id: {self.user_id}")
+        try:
+            response = self.session.post(
+                self.LOGIN_URL,
+                json=payload,
+                headers=self._get_login_headers(),
+                timeout=30
+            )
+            response.raise_for_status()
+            
+            logger.info(f"Login successful. Status: {response.status_code}")
+            
+            # Extract and store user_id from login response
+            self.user_id = self.extract_monitor_uid_from_login(response)
+            logger.info(f"Extracted user_id: {self.user_id}")
 
-        return response
+            return response
+        except requests.exceptions.Timeout:
+            logger.error(f"Login request timed out after 30 seconds")
+            raise
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Login request failed: {e}", exc_info=True)
+            raise
     
     def extract_monitor_uid_from_login(self, login_response: requests.Response) -> str:
         """
@@ -133,19 +213,34 @@ class EasyViewClient:
         """
         try:
             login_data = login_response.json()
+            logger.debug(f"Login response keys: {list(login_data.keys())}")
+            
             # Try to extract UID from response (adjust based on actual API response structure)
             if "monitor_uid" in login_data:
-                return login_data["monitor_uid"]
+                uid = login_data["monitor_uid"]
+                logger.debug(f"Found monitor_uid in response: {uid}")
+                return uid
             elif "uid" in login_data:
-                return login_data["uid"]
+                uid = login_data["uid"]
+                logger.debug(f"Found uid in response: {uid}")
+                return uid
             else:
-                # If not in response, try to get from cookies or other fields
-                # This is a fallback - you may need to adjust based on actual API response
+                # Log the full response for debugging (but mask sensitive data)
+                logger.error(f"Could not find monitor_uid or uid in login response. Available keys: {list(login_data.keys())}")
+                logger.debug(f"Login response (sanitized): {json.dumps(login_data, default=str)}")
                 raise ValueError(
                     "EASYVIEW_MONITOR_UID not set and could not be extracted from login response. "
                     "Please set it in .env file."
                 )
-        except (json.JSONDecodeError, KeyError) as e:
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse login response as JSON: {e}")
+            logger.debug(f"Response text: {login_response.text[:500]}")
+            raise ValueError(
+                f"Could not extract monitor UID from login response: {e}. "
+                "Please set EASYVIEW_MONITOR_UID in .env file."
+            )
+        except KeyError as e:
+            logger.error(f"Key error while extracting monitor UID: {e}")
             raise ValueError(
                 f"Could not extract monitor UID from login response: {e}. "
                 "Please set EASYVIEW_MONITOR_UID in .env file."
@@ -171,38 +266,78 @@ class EasyViewClient:
             requests.HTTPError: If request fails
         """
         if not self.user_id:
+            logger.error("user_id not set. Login must be called first.")
             raise ValueError(
                 "user_id not set. Please call login() first to extract user_id from login response."
             )
         
+        logger.info(f"Fetching status for monitor_uid: {self.user_id} (tz_offset={tz_offset_hours}h, window={window_hours}h)")
         param = self._build_easyview_param(tz_offset_hours, window_hours)
         status_url = f"{self.STATUS_URL_TEMPLATE.format(monitor_uid=self.user_id)}?param={param}"
+        logger.debug(f"Status URL: {status_url}")
         
-        response = self.session.get(
-            status_url,
-            headers=self._get_status_headers()
-        )
-        response.raise_for_status()
+        try:
+            response = self.session.get(
+                status_url,
+                headers=self._get_status_headers(),
+                timeout=30
+            )
+            response.raise_for_status()
+            logger.info(f"Status request successful. Status code: {response.status_code}")
 
-        # Dump the raw response JSON to a file for debugging or inspection
-        with open("response_dump.json", "w", encoding="utf-8") as f:
-            f.write(response.text)
-        
-        return json.loads(response.text)
+            # Dump the raw response JSON to a file for debugging or inspection
+            dump_path = SCRIPT_DIR / "response_dump.json"
+            try:
+                with open(dump_path, "w", encoding="utf-8") as f:
+                    f.write(response.text)
+                logger.debug(f"Response dumped to {dump_path}")
+            except Exception as e:
+                logger.warning(f"Failed to dump response to file: {e}")
+            
+            return json.loads(response.text)
+        except requests.exceptions.Timeout:
+            logger.error(f"Status request timed out after 30 seconds")
+            raise
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Status request failed: {e}", exc_info=True)
+            raise
     
     def get_values(self, data):
-        last_item = data['data']['chart']['sg'][-1]
-
-        ts_utc = float(last_item[0])
-        dt = datetime.datetime.fromtimestamp(ts_utc ) # - tz_offset * 3600 - not usded by them
-        data = {
-            "glucose": round(last_item[1], 1),
-            "timestamp": ts_utc,
-            "time": dt.isoformat(),
-        }
+        """
+        Extract glucose values from status data.
         
-        print("Values: ", data)
-        return data
+        Args:
+            data: Status data dictionary from get_status()
+            
+        Returns:
+            Dictionary with glucose, timestamp, and time
+        """
+        try:
+            if 'data' not in data or 'chart' not in data['data'] or 'sg' not in data['data']['chart']:
+                logger.error(f"Unexpected data structure. Available keys: {list(data.keys())}")
+                raise ValueError("Status data does not contain expected structure: data.chart.sg")
+            
+            sg_data = data['data']['chart']['sg']
+            if not sg_data or len(sg_data) == 0:
+                logger.warning("No glucose data (sg) found in response")
+                raise ValueError("No glucose data available in response")
+            
+            last_item = sg_data[-1]
+            logger.debug(f"Last glucose reading: {last_item}")
+
+            ts_utc = float(last_item[0])
+            dt = datetime.datetime.fromtimestamp(ts_utc)  # - tz_offset * 3600 - not used by them
+            values = {
+                "glucose": round(last_item[1], 1),
+                "timestamp": ts_utc,
+                "time": dt.isoformat(),
+            }
+            
+            logger.info(f"Extracted values: glucose={values['glucose']}, time={values['time']}")
+            return values
+        except (KeyError, IndexError, ValueError, TypeError) as e:
+            logger.error(f"Failed to extract values from data: {e}", exc_info=True)
+            raise
 
 
     @staticmethod
@@ -248,13 +383,15 @@ class EasyViewClient:
         
         # Compact JSON (no spaces!)
         json_str = json.dumps(payload, separators=(",", ":"))
-        print(json_str)
+        logger.debug(f"EasyView param payload: {json_str}")
         
         # Base64 encode (standard, with == padding)
         b64 = base64.b64encode(json_str.encode()).decode()
         
         # URL encode (so == → %3D%3D)
-        return urllib.parse.quote(b64, safe="")
+        encoded_param = urllib.parse.quote(b64, safe="")
+        logger.debug(f"Encoded param length: {len(encoded_param)}")
+        return encoded_param
 
 
 ###########
@@ -360,14 +497,19 @@ def save_to_firestore(uid: str, data: Dict[str, Any]) -> None:
     # Ensure uid is a string (Firestore document IDs must be strings)
     uid_str = str(uid)
     
-    # Prepare data for Firestore (handle NaN, Infinity, etc.)
-    #cleaned_data = prepare_for_firestore(data)
-    
-    doc_ref = db_firestore.collection("users").document(uid_str)
-    doc_ref.set(data)
-    print(f"Data saved to Firestore: users/{uid_str}")
+    try:
+        logger.info(f"Saving data to Firestore: users/{uid_str}")
+        # Prepare data for Firestore (handle NaN, Infinity, etc.)
+        #cleaned_data = prepare_for_firestore(data)
+        
+        doc_ref = db_firestore.collection("users").document(uid_str)
+        doc_ref.set(data)
+        logger.info(f"Data saved to Firestore: users/{uid_str}")
 
-    dump_data_to_json_file(data, f"dump_data_{uid_str}.json")
+        dump_data_to_json_file(data, f"dump_data_{uid_str}.json")
+    except Exception as e:
+        logger.error(f"Failed to save to Firestore: {e}", exc_info=True)
+        raise
 
 
 def save_to_realtime_db(uid: str, data: Dict[str, Any]) -> None:
@@ -381,62 +523,188 @@ def save_to_realtime_db(uid: str, data: Dict[str, Any]) -> None:
     # Ensure uid is a string
     uid_str = str(uid)
     
-    # Get reference to the path: users/{uid}/latest
-    ref = db.reference(f"users/{uid_str}/latest")
-    ref.set(data)
-    print(f"Data saved to Realtime Database: users/{uid_str}/latest")
+    try:
+        logger.info(f"Saving data to Realtime Database: users/{uid_str}/latest")
+        # Get reference to the path: users/{uid}/latest
+        ref = db.reference(f"users/{uid_str}/latest")
+        ref.set(data)
+        logger.info(f"Data saved to Realtime Database: users/{uid_str}/latest")
+    except Exception as e:
+        logger.error(f"Failed to save to Realtime Database: {e}", exc_info=True)
+        raise
 
 
-def main():
-    """Main execution function."""
-
+def setup():
+    """Initialize and setup the EasyView client."""
+    logger.info("=" * 60)
+    logger.info("Starting Gluco-Watch service setup")
+    logger.info("=" * 60)
 
     global username, password, user_type, tz_offset, window_hours
+    
     # Load credentials from environment
     username = os.getenv("EASYVIEW_USERNAME")
     password = os.getenv("EASYVIEW_PASSWORD")
     user_type = os.getenv("EASYVIEW_USER_TYPE", "P")
-    tz_offset = int(os.getenv("TZ_OFFSET_HOURS", "1"))
-    window_hours = int(os.getenv("WINDOW_HOURS", "24"))
+    
+    try:
+        tz_offset = int(os.getenv("TZ_OFFSET_HOURS", "1"))
+    except ValueError:
+        logger.warning(f"Invalid TZ_OFFSET_HOURS, using default: 1")
+        tz_offset = 1
+    
+    try:
+        window_hours = int(os.getenv("WINDOW_HOURS", "24"))
+    except ValueError:
+        logger.warning(f"Invalid WINDOW_HOURS, using default: 24")
+        window_hours = 24
     
     if not username or not password:
+        logger.error("EASYVIEW_USERNAME and EASYVIEW_PASSWORD must be set in .env file")
         raise ValueError(
             "EASYVIEW_USERNAME and EASYVIEW_PASSWORD must be set in .env file"
         )
     
+    logger.info(f"Configuration: user_type={user_type}, tz_offset={tz_offset}h, window_hours={window_hours}h")
+    
     # Initialize client
+    logger.info("Initializing EasyView client...")
     client = EasyViewClient(username, password, user_type)
     
     # Login (this will extract and store user_id)
+    logger.info("Logging in to EasyView API...")
     client.login()
     
-    print(f"Using user_id: {client.user_id}")
-    
-    # Get status
-    status_data = client.get_status(tz_offset, window_hours)
+    logger.info(f"Setup complete. Using user_id: {client.user_id}")
+    return client
 
-    values = client.get_values(status_data)
+
+def loop(client: EasyViewClient):
+    """Execute one monitoring loop iteration."""
+    logger.info("-" * 60)
+    logger.info("Starting monitoring loop iteration")
     
-    print(f"Status retrieved successfully")
-    print(f"Response data keys: {list(status_data.keys()) if isinstance(status_data, dict) else 'N/A'}")
+    try:
+        # Get status
+        logger.info("Fetching status from EasyView API...")
+        status_data = client.get_status(tz_offset, window_hours)
+        logger.debug(f"Response data keys: {list(status_data.keys()) if isinstance(status_data, dict) else 'N/A'}")
+
+        # Extract values
+        logger.info("Extracting glucose values...")
+        values = client.get_values(status_data)
+        
+        # Prepare data for Firestore - add timestamp and extract 'data' field if present
+        firestore_data = {
+            "main": values,
+            "fetched_at": datetime.datetime.now().isoformat(),
+            "fetched_at_unix": int(time.time()),
+            "fetched_at_unix_ms": int(time.time() * 1000),
+            #"data": prepare_for_firestore(status_data['data'])
+        }
+        logger.debug(f"Prepared data: glucose={values.get('glucose')}, time={values.get('time')}")
+        
+        # Save to Firestore
+        logger.info("Saving to Firestore...")
+        save_to_firestore(client.user_id, firestore_data)
+        
+        # Save to Realtime Database
+        logger.info("Saving to Realtime Database...")
+        save_to_realtime_db(client.user_id, firestore_data)
+        
+        logger.info("Monitoring loop iteration completed successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Error in monitoring loop: {e}", exc_info=True)
+        return False
+
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals gracefully."""
+    global shutdown_flag
+    logger.info(f"Received signal {signum}. Initiating graceful shutdown...")
+    shutdown_flag = True
+
+
+def main():
+    """Main entry point for the service."""
+    global shutdown_flag
     
-    # Prepare data for Firestore - add timestamp and extract 'data' field if present
-    firestore_data = {
-        "main": values,
-        "fetched_at": datetime.datetime.now().isoformat(),
-        "fetched_at_unix": int(time.time()),
-        "fetched_at_unix_ms": int(time.time() * 1000),
-        #"data": prepare_for_firestore(status_data['data'])
-    }
+    # Register signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
     
-    # Save to Firestore
-    # Use user_id from the client
-    save_to_firestore(client.user_id, firestore_data)
+    client = None
+    consecutive_errors = 0
+    max_consecutive_errors = 5
+    loop_interval = 2 * 60  # 2 minutes
+    error_retry_interval = 5 * 60  # 5 minutes
     
-    # Save to Realtime Database
-    save_to_realtime_db(client.user_id, firestore_data)
+    logger.info("Gluco-Watch service starting...")
+    logger.info(f"Loop interval: {loop_interval}s, Error retry interval: {error_retry_interval}s")
     
-    print("Process completed successfully")
+    try:
+        client = setup()
+        
+        while not shutdown_flag:
+            try:
+                success = loop(client)
+                
+                if success:
+                    consecutive_errors = 0
+                    logger.debug(f"Sleeping for {loop_interval} seconds until next iteration...")
+                    # Sleep in smaller chunks to check shutdown_flag more frequently
+                    for _ in range(loop_interval):
+                        if shutdown_flag:
+                            break
+                        time.sleep(1)
+                else:
+                    consecutive_errors += 1
+                    logger.warning(f"Loop iteration failed. Consecutive errors: {consecutive_errors}/{max_consecutive_errors}")
+                    
+                    if consecutive_errors >= max_consecutive_errors:
+                        logger.error(f"Too many consecutive errors ({consecutive_errors}). Reinitializing client...")
+                        consecutive_errors = 0
+                        try:
+                            client = setup()
+                        except Exception as e:
+                            logger.error(f"Failed to reinitialize client: {e}", exc_info=True)
+                            logger.info(f"Waiting {error_retry_interval} seconds before retry...")
+                            for _ in range(error_retry_interval):
+                                if shutdown_flag:
+                                    break
+                                time.sleep(1)
+                    
+            except KeyboardInterrupt:
+                logger.info("Received keyboard interrupt")
+                shutdown_flag = True
+                break
+            except Exception as e:
+                consecutive_errors += 1
+                logger.error(f"Unexpected error in main loop: {e}", exc_info=True)
+                logger.warning(f"Consecutive errors: {consecutive_errors}/{max_consecutive_errors}")
+                
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.error(f"Too many consecutive errors ({consecutive_errors}). Reinitializing client...")
+                    consecutive_errors = 0
+                    try:
+                        client = setup()
+                    except Exception as setup_error:
+                        logger.error(f"Failed to reinitialize client: {setup_error}", exc_info=True)
+                
+                logger.info(f"Waiting {error_retry_interval} seconds before retry...")
+                for _ in range(error_retry_interval):
+                    if shutdown_flag:
+                        break
+                    time.sleep(1)
+        
+        logger.info("Shutdown flag set. Exiting gracefully...")
+        
+    except Exception as e:
+        logger.critical(f"Fatal error in main: {e}", exc_info=True)
+        raise
+    finally:
+        logger.info("Gluco-Watch service stopped")
 
 
 if __name__ == "__main__":

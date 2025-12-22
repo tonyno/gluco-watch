@@ -51,4 +51,4 @@ The script will:
 
 # Loading from endpoint
 
-https://firestore.googleapis.com/v1/projects/gluco-watch/databases/(default)/documents/users/78347/state/latest
+https://firestore.googleapis.com/v1/projects/gluco-watch/databases/(default)/documents/users/78347/

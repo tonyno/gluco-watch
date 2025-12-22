@@ -7,6 +7,7 @@ import base64
 import json
 import time
 import math
+import datetime
 import urllib.parse
 from typing import Dict, Any, Optional, Union
 
@@ -27,6 +28,16 @@ if not firebase_admin._apps:
 
 db = firestore.client()
 
+
+def dump_data_to_json_file(data, filename="dump_data.json"):
+    """
+    Dump the provided data to a JSON file for inspection or debugging.
+    Args:
+        data: The data (usually dict or list) to dump.
+        filename: The output filename (default "dump_data.json")
+    """
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 class EasyViewClient:
     """Client for interacting with EasyView Medtrum API."""
@@ -175,6 +186,20 @@ class EasyViewClient:
         
         return json.loads(response.text)
     
+    def get_values(self, data):
+        last_item = data['data']['chart']['sg'][-1]
+
+        ts_utc = last_item[0]
+        dt = datetime.datetime.fromtimestamp(ts_utc ) # - tz_offset * 3600 - not usded by them
+        data = {
+            "glucose": round(last_item[1], 1),
+            "time": dt.isoformat(),
+        }
+        
+        print("Values: ", data)
+        return data
+
+
     @staticmethod
     def _build_easyview_param(tz_offset_hours: int = 1, window_hours: int = 24) -> str:
         """
@@ -182,7 +207,7 @@ class EasyViewClient:
         
         Args:
             tz_offset_hours: Timezone offset (CET = 1)
-            window_hours: How many hours back to fetch
+            window_hours: How many hours back to fetch (default: 24)
             
         Returns:
             URL-encoded base64 parameter string
@@ -190,17 +215,26 @@ class EasyViewClient:
         # Current time in UTC seconds
         now_utc = int(time.time())
         
-        # Adjust for timezone
-        now_tz = now_utc + tz_offset_hours * 3600
+        # Adjust for timezone to get current time in local timezone
+        now_tz_local = now_utc + tz_offset_hours * 3600
         
-        # Round down to nearest whole hour
-        now_tz = (now_tz // 3600) * 3600
+        # Calculate seconds since midnight in local timezone
+        seconds_since_midnight = now_tz_local % 86400  # 86400 = seconds in a day
         
-        # Window start
+        # Calculate following midnight (next midnight) in local timezone
+        # Always round up to the next midnight
+        if seconds_since_midnight == 0:
+            # Exactly at midnight, use next midnight (tomorrow)
+            next_midnight_tz = now_tz_local + 86400
+        else:
+            # Round up to next midnight (tomorrow)
+            next_midnight_tz = now_tz_local - seconds_since_midnight + 86400
+        
+        # Convert back to UTC for the API (subtract timezone offset)
+        now_tz = next_midnight_tz - tz_offset_hours * 3600
+        
+        # Window start: 24 hours back from following midnight
         start_tz = now_tz - window_hours * 3600
-        
-        # Round down to nearest whole hour
-        start_tz = (start_tz // 3600) * 3600
         
         payload = {
             "ts": [start_tz, now_tz],
@@ -209,6 +243,7 @@ class EasyViewClient:
         
         # Compact JSON (no spaces!)
         json_str = json.dumps(payload, separators=(",", ":"))
+        print(json_str)
         
         # Base64 encode (standard, with == padding)
         b64 = base64.b64encode(json_str.encode()).decode()
@@ -216,6 +251,8 @@ class EasyViewClient:
         # URL encode (so == → %3D%3D)
         return urllib.parse.quote(b64, safe="")
 
+
+###########
 
 def prepare_for_firestore(data: Any, max_depth: int = 100, current_depth: int = 0) -> Any:
     """
@@ -319,15 +356,20 @@ def save_to_firestore(uid: str, data: Dict[str, Any]) -> None:
     uid_str = str(uid)
     
     # Prepare data for Firestore (handle NaN, Infinity, etc.)
-    cleaned_data = prepare_for_firestore(data)
+    #cleaned_data = prepare_for_firestore(data)
     
-    doc_ref = db.collection("users").document(uid_str).collection("state").document("latest")
-    doc_ref.set(cleaned_data)
+    doc_ref = db.collection("users").document(uid_str)
+    doc_ref.set(data)
     print(f"Data saved to Firestore: users/{uid_str}/state/latest")
+
+    dump_data_to_json_file(data, f"dump_data_{uid_str}.json")
 
 
 def main():
     """Main execution function."""
+
+
+    global username, password, user_type, tz_offset, window_hours
     # Load credentials from environment
     username = os.getenv("EASYVIEW_USERNAME")
     password = os.getenv("EASYVIEW_PASSWORD")
@@ -350,15 +392,19 @@ def main():
     
     # Get status
     status_data = client.get_status(tz_offset, window_hours)
+
+    values = client.get_values(status_data)
     
     print(f"Status retrieved successfully")
     print(f"Response data keys: {list(status_data.keys()) if isinstance(status_data, dict) else 'N/A'}")
     
     # Prepare data for Firestore - add timestamp and extract 'data' field if present
     firestore_data = {
-        "timestamp": firestore.SERVER_TIMESTAMP,
-        "fetched_at": int(time.time()),
-        "data": status_data['data']
+        "main": values,
+        "fetched_at": datetime.datetime.now().isoformat(),
+        "fetched_at_unix": int(time.time()),
+        "fetched_at_unix_ms": int(time.time() * 1000),
+        #"data": prepare_for_firestore(status_data['data'])
     }
     
     # Save to Firestore

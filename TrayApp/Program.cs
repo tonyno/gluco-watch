@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Threading;
+using System.Runtime.InteropServices;
 
 namespace TrayApp
 {
@@ -22,10 +23,21 @@ namespace TrayApp
         private const string ApiEndpoint = "https://gluco-watch-default-rtdb.europe-west1.firebasedatabase.app/users/78347/latest.json";
         private const double LOW_THRESHOLD = 3.9;
         private const double HIGH_THRESHOLD = 10.0;
+        private const bool SHOW_CONSOLE = true; // Set to false to disable console window
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        static extern bool AllocConsole();
 
         [STAThread]
         static void Main()
         {
+            // Allocate a console window to see Console.WriteLine output (if enabled)
+            if (SHOW_CONSOLE)
+            {
+                AllocConsole();
+            }
+            
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
@@ -68,7 +80,10 @@ namespace TrayApp
                 string jsonContent = await response.Content.ReadAsStringAsync();
                 
                 // Log the payload
-                Console.WriteLine($"Received payload: {jsonContent}");
+                if (SHOW_CONSOLE)
+                {
+                    Console.WriteLine($"Received payload: {jsonContent}");
+                }
                 
                 var jsonDoc = JsonDocument.Parse(jsonContent);
 
@@ -82,14 +97,21 @@ namespace TrayApp
                     if (main.TryGetProperty("timestamp", out var timestamp))
                     {
                         double timestampValue = timestamp.GetDouble();
-                        Console.WriteLine($"main.timestamp: {timestamp.GetRawText()}");
+                        
+                        if (SHOW_CONSOLE)
+                        {
+                            Console.WriteLine($"main.timestamp: {timestamp.GetRawText()}");
+                        }
                         
                         // Convert Unix timestamp to DateTime
                         DateTimeOffset dataTime = DateTimeOffset.FromUnixTimeSeconds((long)timestampValue);
                         DateTime currentTime = DateTime.Now;
                         TimeSpan age = currentTime - dataTime.DateTime;
                         
-                        Console.WriteLine($"Data age: {age.TotalSeconds:F1} seconds ({age.TotalMinutes:F2} minutes)");
+                        if (SHOW_CONSOLE)
+                        {
+                            Console.WriteLine($"Data age: {age.TotalSeconds:F1} seconds ({age.TotalMinutes:F2} minutes)");
+                        }
                     }
 
                     // Update icon on UI thread

@@ -20,11 +20,11 @@ namespace TrayApp
         private static bool isInRedZone = false;
         private static DateTime? lastSuccessfulLoadTime = null; // Track when data was last successfully loaded
         private static TimeSpan? dataAge = null; // Track the age of the current data
-        
+
         private const string ApiEndpoint = "https://gluco-watch-default-rtdb.europe-west1.firebasedatabase.app/users/78347/latest.json";
         private const double LOW_THRESHOLD = 3.9;
         private const double HIGH_THRESHOLD = 10.0;
-        private const bool SHOW_CONSOLE = true; // Set to false to disable console window
+        private const bool SHOW_CONSOLE = false; // Set to false to disable console window
         private const double DATA_AGE_THRESHOLD_MINUTES = 15.0; // Data is considered stale if older than this
         private const double LAST_LOAD_THRESHOLD_MINUTES = 10.0; // Consider offline if no data loaded in this time
 
@@ -40,7 +40,7 @@ namespace TrayApp
             {
                 AllocConsole();
             }
-            
+
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
@@ -63,7 +63,7 @@ namespace TrayApp
 
             // Set up timer to fetch data every 1 minute
             updateTimer = new System.Windows.Forms.Timer();
-            updateTimer.Interval = 3000; // 1 minute in milliseconds
+            updateTimer.Interval = 60000; // 1 minute in milliseconds
             updateTimer.Tick += async (s, e) => await FetchGlucoseData();
             updateTimer.Start();
 
@@ -76,17 +76,17 @@ namespace TrayApp
         static string BuildTooltipText(double glucoseValue, bool isOffline, TimeSpan? dataAge)
         {
             string baseText = $"Glucose: {glucoseValue:F1}";
-            
+
             if (isOffline)
             {
                 baseText += " (Offline)";
             }
-            
+
             if (dataAge.HasValue)
             {
                 int minutes = (int)dataAge.Value.TotalMinutes;
                 int seconds = dataAge.Value.Seconds;
-                
+
                 if (minutes > 0)
                 {
                     baseText += $"\nData age: {minutes}m {seconds}s";
@@ -96,7 +96,7 @@ namespace TrayApp
                     baseText += $"\nData age: {seconds}s";
                 }
             }
-            
+
             return baseText;
         }
 
@@ -105,7 +105,7 @@ namespace TrayApp
             // Check if data is stale (older than 15 minutes)
             if (isDataStale)
                 return true;
-            
+
             // Check if no data were loaded in last 10 minutes
             if (lastSuccessfulLoadTime.HasValue)
             {
@@ -120,7 +120,7 @@ namespace TrayApp
                 // No data ever loaded, consider offline
                 return true;
             }
-            
+
             return false;
         }
 
@@ -132,13 +132,13 @@ namespace TrayApp
                 response.EnsureSuccessStatusCode();
 
                 string jsonContent = await response.Content.ReadAsStringAsync();
-                
+
                 // Log the payload
                 if (SHOW_CONSOLE)
                 {
                     Console.WriteLine($"Received payload: {jsonContent}");
                 }
-                
+
                 var jsonDoc = JsonDocument.Parse(jsonContent);
 
                 // Navigate to main.glucose (Firebase Realtime DB structure)
@@ -146,29 +146,29 @@ namespace TrayApp
                     main.TryGetProperty("glucose", out var glucose))
                 {
                     double glucoseDouble = glucose.GetDouble();
-                    
+
                     // Log main.timestamp and calculate data age
                     bool isDataStale = false;
                     if (main.TryGetProperty("timestamp", out var timestamp))
                     {
                         double timestampValue = timestamp.GetDouble();
-                        
+
                         if (SHOW_CONSOLE)
                         {
                             Console.WriteLine($"main.timestamp: {timestamp.GetRawText()}");
                         }
-                        
+
                         // Convert Unix timestamp to DateTime (Unix timestamps are always in UTC)
                         DateTimeOffset dataTime = DateTimeOffset.FromUnixTimeSeconds((long)timestampValue);
                         DateTime currentTime = DateTime.UtcNow; // Use UTC to match Unix timestamp
                         TimeSpan age = currentTime - dataTime.DateTime;
-                        
+
                         // Store data age for tooltip display
                         dataAge = age;
-                        
+
                         // Check if data is stale (older than threshold)
                         isDataStale = age.TotalMinutes > DATA_AGE_THRESHOLD_MINUTES;
-                        
+
                         if (SHOW_CONSOLE)
                         {
                             Console.WriteLine($"Data age: {age.TotalSeconds:F1} seconds ({age.TotalMinutes:F2} minutes)");
@@ -194,18 +194,18 @@ namespace TrayApp
                         {
                             bool wasInRedZone = isInRedZone;
                             bool nowInRedZone = glucoseDouble < LOW_THRESHOLD;
-                            
+
                             // Check if we're offline (data stale OR no load in last 10 minutes)
                             bool isOffline = IsOffline(isDataStale);
-                            
+
                             glucoseValue = glucoseDouble;
                             trayIcon.Icon?.Dispose();
                             trayIcon.Icon = CreateGlucoseIcon(glucoseValue, isOffline);
-                            
+
                             // Build tooltip text with data age
                             string tooltipText = BuildTooltipText(glucoseDouble, isOffline, dataAge);
                             trayIcon.Text = tooltipText;
-                            
+
                             // Handle red zone warnings - only show when first entering red zone
                             if (nowInRedZone)
                             {
@@ -234,7 +234,7 @@ namespace TrayApp
                 // On error, keep showing the last known value
                 // Could optionally show an error icon or log the error
                 System.Diagnostics.Debug.WriteLine($"Error fetching glucose data: {ex.Message}");
-                
+
                 // Check if we should show offline icon (no data loaded in last 10 minutes)
                 if (trayIcon != null && uiContext != null)
                 {
@@ -242,7 +242,7 @@ namespace TrayApp
                     {
                         // Check offline status (data is stale = false since we failed to load, but check time since last load)
                         bool isOffline = IsOffline(false);
-                        
+
                         if (isOffline)
                         {
                             trayIcon.Icon?.Dispose();
@@ -268,7 +268,7 @@ namespace TrayApp
                 g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
                 // Round to nearest integer for display in small icon
-                string text = Math.Round(value).ToString();
+                string text = (Math.Round(value * 10) / 10).ToString();
 
                 // Try Segoe UI first, fallback to system font if not available
                 Font font = null;
@@ -332,7 +332,7 @@ namespace TrayApp
             // If offline, show gray regardless of glucose value
             if (isOffline)
                 return Color.Gray;
-            
+
             if (value < LOW_THRESHOLD)
                 return Color.Red;        // Low
             if (value > HIGH_THRESHOLD)

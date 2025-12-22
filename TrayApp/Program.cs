@@ -19,6 +19,7 @@ namespace TrayApp
         private static SynchronizationContext uiContext;
         private static bool isInRedZone = false;
         private static DateTime? lastSuccessfulLoadTime = null; // Track when data was last successfully loaded
+        private static TimeSpan? dataAge = null; // Track the age of the current data
         
         private const string ApiEndpoint = "https://gluco-watch-default-rtdb.europe-west1.firebasedatabase.app/users/78347/latest.json";
         private const double LOW_THRESHOLD = 3.9;
@@ -70,6 +71,33 @@ namespace TrayApp
             _ = Task.Run(async () => await FetchGlucoseData());
 
             Application.Run();
+        }
+
+        static string BuildTooltipText(double glucoseValue, bool isOffline, TimeSpan? dataAge)
+        {
+            string baseText = $"Glucose: {glucoseValue:F1}";
+            
+            if (isOffline)
+            {
+                baseText += " (Offline)";
+            }
+            
+            if (dataAge.HasValue)
+            {
+                int minutes = (int)dataAge.Value.TotalMinutes;
+                int seconds = dataAge.Value.Seconds;
+                
+                if (minutes > 0)
+                {
+                    baseText += $"\nData age: {minutes}m {seconds}s";
+                }
+                else
+                {
+                    baseText += $"\nData age: {seconds}s";
+                }
+            }
+            
+            return baseText;
         }
 
         static bool IsOffline(bool isDataStale)
@@ -135,6 +163,9 @@ namespace TrayApp
                         DateTime currentTime = DateTime.UtcNow; // Use UTC to match Unix timestamp
                         TimeSpan age = currentTime - dataTime.DateTime;
                         
+                        // Store data age for tooltip display
+                        dataAge = age;
+                        
                         // Check if data is stale (older than threshold)
                         isDataStale = age.TotalMinutes > DATA_AGE_THRESHOLD_MINUTES;
                         
@@ -146,6 +177,11 @@ namespace TrayApp
                                 Console.WriteLine($"Data is stale (older than {DATA_AGE_THRESHOLD_MINUTES} minutes)");
                             }
                         }
+                    }
+                    else
+                    {
+                        // No timestamp available, clear data age
+                        dataAge = null;
                     }
 
                     // Update last successful load time
@@ -165,7 +201,10 @@ namespace TrayApp
                             glucoseValue = glucoseDouble;
                             trayIcon.Icon?.Dispose();
                             trayIcon.Icon = CreateGlucoseIcon(glucoseValue, isOffline);
-                            trayIcon.Text = isOffline ? $"Glucose: {glucoseValue:F1} (Offline)" : $"Glucose: {glucoseValue:F1}";
+                            
+                            // Build tooltip text with data age
+                            string tooltipText = BuildTooltipText(glucoseDouble, isOffline, dataAge);
+                            trayIcon.Text = tooltipText;
                             
                             // Handle red zone warnings - only show when first entering red zone
                             if (nowInRedZone)
@@ -208,7 +247,8 @@ namespace TrayApp
                         {
                             trayIcon.Icon?.Dispose();
                             trayIcon.Icon = CreateGlucoseIcon(glucoseValue, true);
-                            trayIcon.Text = $"Glucose: {glucoseValue:F1} (Offline)";
+                            string tooltipText = BuildTooltipText(glucoseValue, true, dataAge);
+                            trayIcon.Text = tooltipText;
                         }
                     }, null);
                 }

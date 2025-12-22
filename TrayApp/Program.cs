@@ -14,7 +14,7 @@ namespace TrayApp
         private static NotifyIcon trayIcon;
         private static double glucoseValue = 5.0; // Default value
         private static HttpClient httpClient;
-        private static Timer updateTimer;
+        private static System.Windows.Forms.Timer updateTimer;
         private static SynchronizationContext uiContext;
         private static bool isInRedZone = false;
         private static DateTime? lastWarningTime = null;
@@ -47,7 +47,7 @@ namespace TrayApp
             trayIcon.ContextMenuStrip = menu;
 
             // Set up timer to fetch data every 1 minute
-            updateTimer = new Timer();
+            updateTimer = new System.Windows.Forms.Timer();
             updateTimer.Interval = 60000; // 1 minute in milliseconds
             updateTimer.Tick += async (s, e) => await FetchGlucoseData();
             updateTimer.Start();

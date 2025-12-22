@@ -1,3 +1,5 @@
 ingestor/gluco-watch-firebase-adminsdk*.json
 ingestor/.env
 ingestor/response_dump.json
+TrayApp/bin/*
+TrayApp/obj/*

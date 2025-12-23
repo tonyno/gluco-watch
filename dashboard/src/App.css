@@ -1,0 +1,205 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  min-height: 100vh;
+}
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  background: rgba(255, 255, 255, 0.95);
+  padding: 1.5rem 2rem;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.logout-btn {
+  padding: 0.5rem 1rem;
+  background: #dc3545;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.3s;
+}
+
+.logout-btn:hover {
+  background: #c82333;
+}
+
+.app-header h1 {
+  color: #333;
+  font-size: 1.8rem;
+  font-weight: 600;
+}
+
+.user-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.user-selector label {
+  font-weight: 500;
+  color: #555;
+}
+
+.user-selector input {
+  padding: 0.5rem 1rem;
+  border: 2px solid #ddd;
+  border-radius: 6px;
+  font-size: 1rem;
+  transition: border-color 0.3s;
+}
+
+.user-selector input:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.app-main {
+  flex: 1;
+  padding: 2rem;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+.loading {
+  background: white;
+  padding: 2rem;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  font-size: 1.2rem;
+  color: #666;
+  text-align: center;
+}
+
+.error {
+  background: #fee;
+  border: 2px solid #fcc;
+  padding: 1.5rem;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  color: #c33;
+  text-align: center;
+  max-width: 500px;
+}
+
+.glucose-card {
+  background: white;
+  border-radius: 16px;
+  padding: 2.5rem;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
+  max-width: 600px;
+  width: 100%;
+  text-align: center;
+}
+
+.glucose-value-container {
+  margin-bottom: 1.5rem;
+}
+
+.glucose-value {
+  font-size: 4rem;
+  font-weight: 700;
+  line-height: 1;
+  margin-bottom: 0.5rem;
+  transition: color 0.3s;
+}
+
+.glucose-unit {
+  font-size: 1.2rem;
+  color: #666;
+  font-weight: 500;
+}
+
+.glucose-status {
+  margin-bottom: 2rem;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 0.5rem 1.5rem;
+  border-radius: 20px;
+  color: white;
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.glucose-details {
+  display: grid;
+  gap: 1rem;
+  text-align: left;
+  background: #f8f9fa;
+  padding: 1.5rem;
+  border-radius: 12px;
+  margin-top: 1.5rem;
+}
+
+.detail-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #e9ecef;
+}
+
+.detail-item:last-child {
+  border-bottom: none;
+}
+
+.detail-label {
+  font-weight: 600;
+  color: #555;
+  font-size: 0.9rem;
+}
+
+.detail-value {
+  color: #333;
+  font-size: 0.95rem;
+}
+
+@media (max-width: 768px) {
+  .app-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .glucose-value {
+    font-size: 3rem;
+  }
+
+  .glucose-card {
+    padding: 1.5rem;
+  }
+}

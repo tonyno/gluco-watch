@@ -1,0 +1,60 @@
+.unauthorized-container {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 2rem;
+}
+
+.unauthorized-card {
+  background: white;
+  border-radius: 16px;
+  padding: 3rem;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
+  max-width: 500px;
+  width: 100%;
+  text-align: center;
+}
+
+.unauthorized-icon {
+  font-size: 4rem;
+  margin-bottom: 1rem;
+}
+
+.unauthorized-card h1 {
+  color: #333;
+  font-size: 2rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+}
+
+.unauthorized-card p {
+  color: #666;
+  font-size: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.user-email {
+  color: #999;
+  font-size: 0.9rem;
+  font-style: italic;
+  margin-top: 1rem;
+  margin-bottom: 2rem;
+}
+
+.logout-button {
+  padding: 0.75rem 2rem;
+  background: #667eea;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.3s;
+}
+
+.logout-button:hover {
+  background: #5568d3;
+}

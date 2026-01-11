@@ -1,5 +1,8 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include <ArduinoJson.h>
 
 #define LED_PIN 15
 #define LED_RED 40
@@ -7,22 +10,55 @@
 #define LED_GREEN 36
 
 // Seznam WiFi sítí (nahraďte názvy a hesla svými hodnotami)
+#include "secrets.h"
+
 struct WifiCred {
   const char* ssid;
   const char* pass;
 };
 
 WifiCred wifiCreds[] = {
-  { "YOUR_SSID_1", "YOUR_PASSWORD_1" },
-  { "YOUR_SSID_2", "YOUR_PASSWORD_2" },
-  // Přidejte další sítě podle potřeby
+  { WIFI_SSID_1, WIFI_PASS_1 },
+  { WIFI_SSID_2, WIFI_PASS_2 },
+  // Přidejte další sítě podle potřeby (aktualizujte secrets.h a example)
 };
 const size_t WIFI_CREDS_COUNT = sizeof(wifiCreds) / sizeof(wifiCreds[0]);
 
 unsigned long loopCount = 0; // počítadlo průchodů loop()
 
+// Fetch interval and URL
+const char* GLUCOSE_URL = "https://gluco-watch-default-rtdb.europe-west1.firebasedatabase.app/users/78347/latest.json";
+const unsigned long FETCH_INTERVAL_MS = 1UL * 60UL * 1000UL; // 10 minutes
+unsigned long lastFetchMs = 0;
+void fetchGlucose();
+
 // Blink timing (milliseconds). Halved to make LEDs blink 2× faster.
 #define BLINK_DELAY 500
+
+// Update LEDs based on glucose value:
+// - red if glucose < 3.9
+// - yellow if glucose > 10
+// - green otherwise
+void updateLedForGlucose(float glucose) {
+  Serial.print("Aktualizuji LEDy podle cukru: ");
+  Serial.println(glucose);
+  if (glucose < 3.9f) {
+    digitalWrite(LED_RED, HIGH);
+    digitalWrite(LED_YELLOW, LOW);
+    digitalWrite(LED_GREEN, LOW);
+    Serial.println("Rozsvitena cervena LED");
+  } else if (glucose > 10.0f) {
+    digitalWrite(LED_RED, LOW);
+    digitalWrite(LED_YELLOW, HIGH);
+    digitalWrite(LED_GREEN, LOW);
+    Serial.println("Rozsvitena zluta LED");
+  } else {
+    digitalWrite(LED_RED, LOW);
+    digitalWrite(LED_YELLOW, LOW);
+    digitalWrite(LED_GREEN, HIGH);
+    Serial.println("Rozsvitena zelena LED");
+  }
+}
 
 void setup()
 {
@@ -76,6 +112,68 @@ void setup()
 
   if (!connected) {
     Serial.println("Nebyla nalezena zadna dostupna WiFi (vsechny pokusy selhaly).");
+  } else {
+    // initial fetch immediately after successful WiFi connection
+    fetchGlucose();
+    lastFetchMs = millis();
+  }
+}
+
+// Note: keep WiFi credentials out of source control. Use src/secrets.h (not committed) or environment-specific config.
+
+void fetchGlucose() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi neni pripojena, preskakuji stahovani");
+    WiFi.reconnect();
+    return;
+  }
+
+  WiFiClientSecure client;
+  client.setInsecure(); // NOTE: for simplicity; consider using proper root cert in production
+  HTTPClient http;
+  Serial.print("Stahuji: ");
+  Serial.println(GLUCOSE_URL);
+  if (http.begin(client, GLUCOSE_URL)) {
+    int httpCode = http.GET();
+    if (httpCode == HTTP_CODE_OK) {
+      String payload = http.getString();
+      Serial.println("Prijaty payload:");
+      Serial.println(payload);
+
+      // Parse JSON using ArduinoJson
+      DynamicJsonDocument doc(1024);
+      DeserializationError err = deserializeJson(doc, payload);
+      if (err) {
+        Serial.print("JSON parse error: ");
+        Serial.println(err.c_str());
+      } else {
+        if (doc.containsKey("main") && doc["main"].is<JsonObject>()) {
+          JsonObject main = doc["main"].as<JsonObject>();
+          if (main.containsKey("glucose")) {
+            float glucose = main["glucose"].as<float>();
+            Serial.print("Hladina cukru: ");
+            Serial.println(glucose);
+            updateLedForGlucose(glucose);
+          } else {
+            Serial.println("Pole 'glucose' nebylo nalezeno v objektu 'main'.");
+          }
+        } else if (doc.containsKey("glucose")) {
+          // fallback: top-level glucose
+          float glucose = doc["glucose"].as<float>();
+          Serial.print("Hladina cukru: ");
+          Serial.println(glucose);
+          updateLedForGlucose(glucose);
+        } else {
+          Serial.println("Pole 'main' nebo 'glucose' nebylo nalezeno v JSONu.");
+        }
+      }
+    } else {
+      Serial.print("HTTP GET selhalo, kod: ");
+      Serial.println(httpCode);
+    }
+    http.end();
+  } else {
+    Serial.println("HTTP begin selhalo");
   }
 }
 
@@ -85,15 +183,18 @@ void loop()
   Serial.print("Pocet pruchodu loop(): ");
   Serial.println(loopCount);
 
-  digitalWrite(LED_PIN, HIGH);
-  digitalWrite(LED_RED, HIGH);
-  digitalWrite(LED_YELLOW, HIGH);
-  digitalWrite(LED_GREEN, HIGH); // LED zapnout
-  delay(BLINK_DELAY);
+  // If WiFi disconnected, try to reconnect (non-blocking)
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi neni pripojena, pokusim se znovu pripojit...");
+    WiFi.reconnect();
+  }
 
-  digitalWrite(LED_PIN, LOW);
-  digitalWrite(LED_RED, LOW);
-  digitalWrite(LED_YELLOW, LOW);
-  digitalWrite(LED_GREEN, LOW); // LED vypnout
-  delay(BLINK_DELAY);
+  unsigned long now = millis();
+  if (now - lastFetchMs >= FETCH_INTERVAL_MS) {
+    fetchGlucose();
+    lastFetchMs = now;
+  }
+
+  // Idle a bit to reduce CPU usage
+  delay(1000);
 }

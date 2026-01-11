@@ -3,6 +3,7 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
+#include <TM1637Display.h>
 
 #define LED_PIN 15
 #define LED_RED 40
@@ -11,6 +12,8 @@
 
 // Seznam WiFi sítí (nahraďte názvy a hesla svými hodnotami)
 #include "secrets.h"
+
+TM1637Display display(18, 16);
 
 struct WifiCred {
   const char* ssid;
@@ -71,6 +74,9 @@ void setup()
   // while (!Serial) {            // počká na otevření Serial Monitoru (u ESP32 není nutné, ale nevadí)
   //   delay(10);
   // }
+
+  display.setBrightness(0x0f);
+  display.showNumberDec(30); 
 
   Serial.println("ESP32 startuje...");
 

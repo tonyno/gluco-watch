@@ -44,6 +44,7 @@ void fetchGlucose();
 // - green otherwise
 void updateLedForGlucose(float glucose) {
   Serial.print("Aktualizuji LEDy podle cukru: ");
+  display.showNumberDec((int)(glucose * 10), true, 4, 0); // zobrazit hodnotu glukózy ×10
   Serial.println(glucose);
   if (glucose < 3.9f) {
     digitalWrite(LED_RED, HIGH);
@@ -76,7 +77,6 @@ void setup()
   // }
 
   display.setBrightness(0x0f);
-  display.showNumberDec(30); 
 
   Serial.println("ESP32 startuje...");
 

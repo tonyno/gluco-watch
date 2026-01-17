@@ -6,14 +6,14 @@
 #include <TM1637Display.h>
 
 #define LED_PIN 15
-#define LED_RED 40
-#define LED_YELLOW 38
-#define LED_GREEN 36
+#define LED_RED 3
+#define LED_YELLOW 7
+#define LED_GREEN 5   
 
 // Seznam WiFi sítí (nahraďte názvy a hesla svými hodnotami)
 #include "secrets.h"
 
-TM1637Display display(18, 16);
+TM1637Display display(35, 33);
 
 struct WifiCred {
   const char* ssid;
@@ -38,14 +38,45 @@ void fetchGlucose();
 // Blink timing (milliseconds). Halved to make LEDs blink 2× faster.
 #define BLINK_DELAY 500
 
+// Helper: show glucose as clock HH:MM on the 4-digit display
+// - example: 3 -> 3:00, 3.51 -> 3:51
+void showGlucoseAsClock(float glucose) {
+  if (isnan(glucose) || glucose < 0.0f) {
+    // show 0:00 for invalid values
+    display.showNumberDecEx(0, 0b01000000, false, 4, 0);
+    return;
+  }
+
+  int hours = (int)floor(glucose);
+  float frac = glucose - (float)hours;
+  int minutes = (int)round(frac * 100.0f);
+  if (minutes >= 100) { // carry if rounding pushed minutes to 100
+    minutes = 0;
+    hours += 1;
+  }
+
+  if (hours > 99) {
+    // cannot display more than 2-digit hours on 4-digit display; show 9999 as overflow
+    display.showNumberDec(9999, true, 4, 0);
+    return;
+  }
+
+  int val = hours * 100 + minutes; // e.g., 3:51 -> 351
+  // Use dot/colon bit (0b01000000) to render colon between 2nd and 3rd digits
+  display.showNumberDecEx(val, 0b01000000, false, 4, 0);
+}
+
 // Update LEDs based on glucose value:
 // - red if glucose < 3.9
 // - yellow if glucose > 10
 // - green otherwise
 void updateLedForGlucose(float glucose) {
   Serial.print("Aktualizuji LEDy podle cukru: ");
-  display.showNumberDec((int)(glucose * 10), true, 4, 0); // zobrazit hodnotu glukózy ×10
   Serial.println(glucose);
+
+  // show as HH:MM on 4-digit display
+  showGlucoseAsClock(glucose);
+
   if (glucose < 3.9f) {
     digitalWrite(LED_RED, HIGH);
     digitalWrite(LED_YELLOW, LOW);
